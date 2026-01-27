@@ -168,6 +168,9 @@ Game = {
         -- and only rebuild once we run out of cards
         deck = {},
 
+        animations = {
+        },
+
         -- state for a specific round of the game
         round = {
             -- Player and dealer's hands
