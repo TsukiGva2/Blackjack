@@ -5,6 +5,13 @@ function Queue.new()
 end
 
 function Queue.push(q, v)
+    -- Prevent duplicates
+    for _, val in ipairs(q) do
+        if val == v then
+            return false
+        end
+    end
+
     local last = q.last + 1
     q.last = last
     q[last] = v
@@ -17,6 +24,14 @@ function Queue.pop(q)
     q[first] = nil
     q.first = first + 1
     return v
+end
+
+function Queue.empty(q)
+    if q.first > q.last then
+        return true
+    end
+
+    return false
 end
 
 return Queue
