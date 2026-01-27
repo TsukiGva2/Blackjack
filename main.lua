@@ -1,5 +1,5 @@
 
-Queue = require('queue')
+local Queue = require('queue')
 
 function build_deck()
     local deck = {}
@@ -126,13 +126,13 @@ function print_text_shadow(text, x, y)
 end
 
 -- function that counts up every time its called
-__c=0
+local __c=0
 function iota()
     __c = __c + 1
     return __c
 end
 
-Game = {
+local Game = {
     -- Game loaded resources, textures, music, images...
     resources = {
         images = {
@@ -168,10 +168,7 @@ Game = {
         -- and only rebuild once we run out of cards
         deck = {},
 
-        animations = {
-        },
-
-        -- state for a specific round of the game
+        -- state for a specific round of the game (only game LOGIC states)
         round = {
             -- Player and dealer's hands
             hands = {
@@ -186,13 +183,13 @@ Game = {
                 -- Stays nil until game has a defined winner
                 winner = nil,
                 winmsg = "",
+            },
+        },
 
-                -- Number of cards hidden per player.
-                -- TODO: hide INDEX instead of number of cards
-                cards_hidden = {
-                    dealer = { false, false },
-                    player = { false, false },
-                },
+        view = {
+            cards = {
+                dealer = {},
+                player = {},
             },
         },
 
@@ -249,16 +246,18 @@ function Game:enqueue(e)
     Queue.push(self.state.events, e)
 end
 
-function Game:request_dealer_autohit()
-    self:enqueue(self.const.events.DEALER_AUTOHIT)
-end
-
 -- Repetition here is intentional, i want event handling to be as clear
 -- and simple as possible, since it's the backbone of the engine.
 -- Also, as you see below, sometimes we need to add restrictions, and
 -- functions make this easier.
+function Game:request_dealer_autohit()
+    if #self.state.deck < 1 then return end
+
+    self:enqueue(self.const.events.DEALER_AUTOHIT)
+end
+
 function Game:request_player_hit()
-    if not Game.state.round.flags.player_can_hit then return end
+    if not self.state.round.flags.player_can_hit then return end
 
     self:enqueue(self.const.events.PLAYER_HIT)
 end
@@ -288,8 +287,52 @@ function Game:build_deck()
     self.state.deck = build_deck()
 end
 
+function Game:hand_update_view(player)
+    local index = #self.state.round.hands[player]
+    local graphics = self.settings.graphical
+
+    local x = graphics.card_margin_x + (index - 1) * graphics.card_spacing_x
+    local y = graphics.card_margin_y
+
+    if player == 'player' then
+        y = y + (graphics.card_spacing_y + graphics.card_margin_players_y)
+    end
+
+    self.state.view.hands[player][index] = {
+        x = x,
+        y = y,
+        target_x = x,
+        target_y = y,
+        lift = 0,
+        hover = false,
+        scale = 1,
+    }
+end
+
+function Game:deck_update_view()
+    local graphics = self.settings.graphical
+
+    local margin_x = graphics.deck_margin_x + (self.const.CARDS/4)
+    local margin_y = graphics.deck_margin_y + (self.const.CARDS/10)
+
+    self.state.view.deck = {
+        text_x = graphics.deck_margin_x + (graphics.card_spacing_x * 0.35),
+        text_y = graphics.deck_margin_y + graphics.card_spacing_y + 5,
+
+        x = margin_x,
+        y = margin_y,
+        
+        x_div = 5,
+        y_div = 10,
+    }
+end
+
 function Game:draw_for(player)
     draw_card(self.state.deck, self.state.round.hands[player])
+
+    self:hand_update_view(player)
+    self:deck_update_view()
+
     self:request_score_update()
 end
 
@@ -297,11 +340,19 @@ function Game:hand_value(player)
     return hand_value(self.state.round.hands[player])
 end
 
+function Game:hide_cards(player, mask)
+    if #self.state.view.hands[player] < #mask then
+        error("Too many cards specified in hide mask")
+    end
+
+    for index, hidden in ipairs(mask) do
+        self.state.view.hands[player][index].hidden = hidden
+    end
+end
+
 function Game:show_cards()
-    self.state.round.flags.cards_hidden = {
-                    dealer = { false, false },
-                    player = { false, false },
-                }
+    self:hide_cards('player', { false, false })
+    self:hide_cards('dealer', { false, false })
 end
 
 function Game:reset()
@@ -318,10 +369,13 @@ function Game:reset()
         dealer = {},
     }
 
-    -- Maybe apply deck special effects here?
-    self.state.round.flags.cards_hidden = {
-        dealer = { true, false },
-        player = { false, false },
+    self.state.view = {
+        hands = {
+            player = {},
+            dealer = {},
+        },
+
+        deck = {},
     }
 
     self.state.round.flags.player_can_hit = true
@@ -332,54 +386,45 @@ function Game:reset()
 
     self:draw_for('dealer')
     self:draw_for('dealer')
+    
+    self:hide_cards('player', { false, false })
+    self:hide_cards('dealer', { true, false })
 end
 
 function Game:print_cards(player)
-    local graphics = self.settings.graphical
-
-    local xoffset = 0
-    local yoffset = 0
-
-    if player == 'player' then
-        yoffset = graphics.card_spacing_y +
-            graphics.card_margin_y +
-            graphics.card_margin_players_y
-    else
-        yoffset = graphics.card_margin_y
-    end
-
     local hand = self.state.round.hands[player]
-    local hidden = self.state.round.flags.cards_hidden[player]
 
-    -- This flag determines if we are going to print a '?' in the total
     local has_hidden_card = false
 
-    for index, card in ipairs(hand) do
-        xoffset = graphics.card_margin_x +
-            (index - 1) * graphics.card_spacing_x
+    local x = 0
+    local y = 0
 
-        if hidden[index] then
+    for index, card in ipairs(hand) do
+        local view = self.state.view.hands[player][index]
+
+        x = view.x
+        y = view.y
+
+        if view.hidden then
             has_hidden_card = true
 
             love.graphics.draw(
-                self.resources.images.deck_back, xoffset, yoffset)
+                self.resources.images.deck_back, view.x, view.y)
         else
             love.graphics.draw(
-                self.resources.images.cards[card.image],
-                xoffset, yoffset)
+                self.resources.images.cards[card.image], view.x, view.y)
         end
     end
 
     love.graphics.setColor(0,0,0)
 
     -- hand totals
-    yoffset = yoffset - 20
-    xoffset = graphics.card_margin_x
+    y = y - 20
 
     if has_hidden_card then
-        love.graphics.print('total: ?', xoffset, yoffset)
+        love.graphics.print('total: ?', x, y)
     else
-        love.graphics.print('total: '..hand_value(hand), xoffset, yoffset)
+        love.graphics.print('total: '..hand_value(hand), x, y)
     end
 
     love.graphics.setColor(1,1,1)
@@ -400,31 +445,36 @@ function Game:print_overlay()
 end
 
 function Game:print_deck()
-    local graphics = self.settings.graphical
+    local deck_v = self.state.view.deck
 
-    print_text_shadow(#self.state.deck..'/52',
-        graphics.deck_margin_x + (graphics.card_spacing_x * 0.35),
-        graphics.deck_margin_y + graphics.card_spacing_y + 5)
+    local text_x = deck_v.text_x
+    local text_y = deck_v.text_y
 
-    local margin_x = graphics.deck_margin_x + (#self.state.deck/4)
-    local margin_y = graphics.deck_margin_y + (#self.state.deck/10)
+    local x = deck_v.x
+    local y = deck_v.y
+
+    local x_div = deck_v.x_div
+    local y_div = deck_v.y_div
+
+    print_text_shadow(#self.state.deck..'/52', text_x, text_y)
 
     for i = 1, #self.state.deck do
-        love.graphics.draw(self.resources.images.deck_back,
-            (-i/5) + margin_x,
-            (-i/10) + margin_y)
+        love.graphics.draw(self.resources.images.deck_back, (-i/x_div) + x, (-i/y_div) + y)
     end
+
 end
 
 function Game:player_hit()
-    Game:draw_for('player')
+    self:draw_for('player')
 end
 
 function Game:dealer_autohit()
     local dealer_min = self.settings.gameplay.dealer_score_min
 
-    while Game:hand_value('dealer') < dealer_min do
-        Game:draw_for('dealer')
+    while self:hand_value('dealer') < dealer_min do
+        if #self.state.deck < 1 then return end
+
+        self:draw_for('dealer')
     end
 end
 
