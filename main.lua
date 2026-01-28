@@ -1,5 +1,6 @@
 
 local Queue = require('queue')
+local Animation = require('animation')
 
 function build_deck()
     local deck = {}
@@ -68,49 +69,33 @@ function check_win(player, dealer, rules)
     local dealer_score = hand_value(dealer)
 
     if bust(player_score, rules) then
-        return {
-            win = 'dealer',
-            msg = 'Dealer wins (player bust)'
-        }
+        return 'dealer'
     end
 
     if bust(dealer_score, rules) then
-        return {
-            win = 'player',
-            msg = 'Player wins (dealer bust)'
-        }
+        return 'player'
     end
 
     if twenty_one(player_score, rules) then
-        return {
-            win = 'player',
-            msg = 'Player wins ('..rules.score_thresh..')'
-        }
+        return 'player'
     end
 
     if twenty_one(dealer_score, rules) then
-        return {
-            win = 'dealer',
-            msg = 'Dealer wins ('..rules.score_thresh..')'
-        }
+        return 'dealer'
     end
 
     if player_score > dealer_score then
-        return {
-            win = 'player',
-            msg = 'Player wins ('..player_score..' against '..dealer_score..')'
-        }
+        return 'player'
     elseif dealer_score > player_score then
-        return {
-            win = 'dealer',
-            msg = 'Dealer wins ('..dealer_score..' against '..player_score..')'
-        }
+        return 'dealer'
     else
-        return {
-            win = 'no one',
-            msg = 'Draw'
-        }
+        return 'draw'
     end
+end
+
+function in_rect(px, py, x, y, w, h)
+    return px >= x and px <= x + w
+       and py >= y and py <= y + h
 end
 
 function draw_card(deck, hand)
@@ -136,8 +121,12 @@ local Game = {
     -- Game loaded resources, textures, music, images...
     resources = {
         images = {
-            deck_back = nil,
-            cards     = {},
+            deck_back  = nil,
+            cards      = {},
+            characters = {},
+        },
+
+        fonts = {
         },
     },
 
@@ -150,6 +139,9 @@ local Game = {
         -- over and over.
         CARDS = 52,
 
+        CARD_W = 52,
+        CARD_H = 72,
+
         events = {
             DEALER_AUTOHIT = iota(),
             PLAYER_HIT     = iota(),
@@ -160,6 +152,8 @@ local Game = {
             REVEAL_CARDS   = iota(),
         },
     },
+
+    deltatime = 0,
 
     -- General state of the game, the deck, and the round-specific state
     -- e.g. hands.
@@ -177,19 +171,36 @@ local Game = {
             },
 
             flags = {
-                -- Used to block player hits
+                -- Used thttps://azuna-pixels.itch.io/free-food-iconso block player hits
                 player_can_hit = true,
 
                 -- Stays nil until game has a defined winner
                 winner = nil,
-                winmsg = "",
+            },
+
+            dealer = {
+                name = 'Opponent',
             },
         },
 
         view = {
-            cards = {
+            display_name = {
+                dealer = 'Opponent',
+                player = 'Player',
+            },
+
+            hands = {
                 dealer = {},
                 player = {},
+            },
+
+            deck = {},
+
+            ui = {
+                dealer = {
+                    focus_bar = {},
+                    animation = {},
+                }
             },
         },
 
@@ -232,6 +243,9 @@ local Game = {
 function Game:load_images()
     local images = self.resources.images
 
+    table.insert(images.characters,
+        love.graphics.newImage('images/characters/witch/c00b_01idle.png'))
+
     -- Load the deck's back image
     images.deck_back = love.graphics.newImage('images/decks/red.png')
 
@@ -240,6 +254,17 @@ function Game:load_images()
         local path = string.format('images/%02d.png', card)
         images.cards[card] = love.graphics.newImage(path)
     end
+end
+
+function Game:load_fonts()
+    --local monogram = love.graphics.newFont("resources/fonts/monogram.ttf", 20)
+    local badcomic = love.graphics.newFont("resources/fonts/badcomic/ttf/BadComic-Regular.ttf", 14)
+    local kaph     = love.graphics.newFont("resources/fonts/kaph/ttf/Kaph-Regular.ttf", 16)
+
+    self.resources.fonts.main = badcomic
+    self.resources.fonts.head = kaph
+
+    love.graphics.setFont(badcomic)
 end
 
 function Game:enqueue(e)
@@ -303,9 +328,13 @@ function Game:hand_update_view(player)
         y = y,
         target_x = x,
         target_y = y,
+
         lift = 0,
-        hover = false,
         scale = 1,
+        hover = false,
+
+        alpha = 0,
+        target_alpha = 1,
     }
 end
 
@@ -314,6 +343,13 @@ function Game:deck_update_view()
 
     local margin_x = graphics.deck_margin_x + (self.const.CARDS/4)
     local margin_y = graphics.deck_margin_y + (self.const.CARDS/10)
+
+    local deck = self.state.view.deck
+
+    -- Stuff that we don't bother changing
+    local lift  = deck.lift
+    local hover = deck.hover
+    local scale = deck.scale
 
     self.state.view.deck = {
         text_x = graphics.deck_margin_x + (graphics.card_spacing_x * 0.35),
@@ -324,6 +360,10 @@ function Game:deck_update_view()
         
         x_div = 5,
         y_div = 10,
+
+        lift  = lift,
+        hover = hover,
+        scale = scale,
     }
 end
 
@@ -369,13 +409,37 @@ function Game:reset()
         dealer = {},
     }
 
-    self.state.view = {
-        hands = {
-            player = {},
-            dealer = {},
+    -- Define opponent here
+    self.state.round.dealer = {
+        name = "Opponent",
+        
+        focus     = 0,
+        focus_max = 8,
+    }
+
+    self.state.view.ui.dealer = {
+        focus_bar = {
+            x = 150,
+            y = 10,
         },
 
-        deck = {},
+        animation = Animation.new(
+                self.resources.images.characters[
+                    love.math.random(#self.resources.images.characters)],
+               480, 480, 14)
+    }
+
+    self.state.view.ui.dealer.animation.playing = true
+
+    self.state.view.hands = {
+        player = {},
+        dealer = {},
+    }
+
+    self.state.view.deck = {
+        lift = 0,
+        hover = 0,
+        scale = 1,
     }
 
     self.state.round.flags.player_can_hit = true
@@ -389,45 +453,6 @@ function Game:reset()
     
     self:hide_cards('player', { false, false })
     self:hide_cards('dealer', { true, false })
-end
-
-function Game:print_cards(player)
-    local hand = self.state.round.hands[player]
-
-    local has_hidden_card = false
-
-    local x = 0
-    local y = 0
-
-    for index, card in ipairs(hand) do
-        local view = self.state.view.hands[player][index]
-
-        x = view.x
-        y = view.y
-
-        if view.hidden then
-            has_hidden_card = true
-
-            love.graphics.draw(
-                self.resources.images.deck_back, view.x, view.y)
-        else
-            love.graphics.draw(
-                self.resources.images.cards[card.image], view.x, view.y)
-        end
-    end
-
-    love.graphics.setColor(0,0,0)
-
-    -- hand totals
-    y = y - 20
-
-    if has_hidden_card then
-        love.graphics.print('total: ?', x, y)
-    else
-        love.graphics.print('total: '..hand_value(hand), x, y)
-    end
-
-    love.graphics.setColor(1,1,1)
 end
 
 function Game:print_overlay()
@@ -444,22 +469,81 @@ function Game:print_overlay()
     love.graphics.setColor(1,1,1)
 end
 
+function Game:print_dealer_character()
+    Animation.draw(
+        self.state.view.ui.dealer.animation,
+        300, 10)
+end
+
+function Game:print_cards(player)
+    local hand = self.state.round.hands[player]
+
+    local has_hidden_card = false
+
+    local x = 0
+    local y = 0
+
+    for index, card in ipairs(hand) do
+        local view = self.state.view.hands[player][index]
+
+        x = view.x
+        y = view.y + view.lift
+
+        local r, g, b, a = love.graphics.getColor()
+        love.graphics.setColor(1, 1, 1, view.alpha)
+
+        if view.hidden then
+            has_hidden_card = true
+
+            love.graphics.draw(
+                self.resources.images.deck_back, x, y)
+        else
+            love.graphics.draw(
+                self.resources.images.cards[card.image], x, y)
+        end
+
+        love.graphics.setColor(r, g, b, a)
+    end
+
+    love.graphics.setColor(0,0,0)
+
+    -- hand totals
+    y = y - 20
+
+    if has_hidden_card then
+        love.graphics.print('total: ?', x, y)
+    else
+        love.graphics.print('total: '..hand_value(hand), x, y)
+    end
+
+    love.graphics.setColor(1,1,1)
+end
+
 function Game:print_deck()
-    local deck_v = self.state.view.deck
+    local deck = self.state.view.deck
 
-    local text_x = deck_v.text_x
-    local text_y = deck_v.text_y
+    local text_x = deck.text_x
+    local text_y = deck.text_y
 
-    local x = deck_v.x
-    local y = deck_v.y
+    local x = deck.x
+    local y = deck.y
 
-    local x_div = deck_v.x_div
-    local y_div = deck_v.y_div
+    local x_div = deck.x_div
+    local y_div = deck.y_div
 
     print_text_shadow(#self.state.deck..'/52', text_x, text_y)
 
-    for i = 1, #self.state.deck do
-        love.graphics.draw(self.resources.images.deck_back, (-i/x_div) + x, (-i/y_div) + y)
+    local deck_size = #self.state.deck
+
+    for i = 1, deck_size do
+        local draw_x = (-i/x_div) + x
+        local draw_y = (-i/y_div) + y
+
+        if i == deck_size then
+            draw_y = draw_y + deck.lift
+        end
+
+        love.graphics.draw(self.resources.images.deck_back, draw_x, draw_y)
     end
 
 end
@@ -497,13 +581,12 @@ function Game:score_update()
 end
 
 function Game:check_win()
-    local check = check_win(
+    local winner = check_win(
         self.state.round.hands.player,
         self.state.round.hands.dealer,
         self.settings.gameplay)
 
-    self.state.round.flags.winner = check.win
-    self.state.round.flags.winmsg = check.msg
+    self.state.round.flags.winner = winner
 end
 
 function Game:round_end()
@@ -514,7 +597,88 @@ function Game:round_end()
     self:request_check_win()
 end
 
-function Game:process()
+function Game:cards_hover_check()
+    local mx, my = love.mouse.getPosition()
+
+    for player, cards in pairs(self.state.view.hands) do
+        for _, view in ipairs(cards) do
+            local hover = in_rect(
+                mx, my, view.x, view.y,
+                self.const.CARD_W,
+                self.const.CARD_H)
+
+            view.hover = hover
+        end
+    end
+end
+
+function Game:deck_hover_check()
+    if #self.state.deck < 1 then
+        self.state.view.deck.hover = false
+        return
+    end
+
+    local mx, my = love.mouse.getPosition()
+    local deck = self.state.view.deck
+
+    local hover = in_rect(mx, my, deck.x, deck.y,
+                    self.const.CARD_W,
+                    self.const.CARD_H)
+
+    deck.hover = hover
+end
+
+function Game:cards_animation_process()
+    for player, cards in pairs(self.state.view.hands) do
+        for _, view in ipairs(cards) do
+            -- Lift
+            local target_lift = view.hover and -12 or 0
+            view.lift = view.lift +
+                (target_lift - view.lift) * 12 * self.deltatime
+
+            -- Fade
+            view.alpha = view.alpha +
+                (view.target_alpha - view.alpha) * 8 * self.deltatime
+        end
+    end
+end
+
+function Game:deck_animation_process()
+    local deck = self.state.view.deck
+
+    local target_lift = deck.hover and -10 or 0
+    deck.lift = deck.lift + (target_lift - deck.lift) * 6 * self.deltatime
+
+    if deck.hover then
+        cursor = love.mouse.getSystemCursor("hand")
+        love.mouse.setCursor(cursor)
+    else
+        love.mouse.setCursor()
+    end
+end
+
+function Game:dealer_animation_process()
+    Animation.update(
+        self.state.view.ui.dealer.animation,
+        self.deltatime)
+end
+
+function Game:animations_process()
+    self:cards_hover_check()
+    self:cards_animation_process()
+
+    self:deck_hover_check()
+    self:deck_animation_process()
+
+    self:dealer_animation_process()
+end
+
+function Game:process(dt)
+    self.deltatime = dt
+
+    -- Animations
+    self:animations_process()
+
     -- Events:
     --  DEALER_AUTOHIT
     --  PLAYER_HIT
@@ -543,21 +707,13 @@ function Game:process()
             self:reset()
         end
     end
+
 end
 
 function Game:print_winner()
     local winner = self.state.round.flags.winner
 
     if winner then
-        local graphics = self.settings.graphical
-
-        love.graphics.setColor(0,0,0)
-
-        love.graphics.print(self.state.round.flags.winmsg,
-            graphics.deck_margin_x + (graphics.card_spacing_x * 0.35),
-            graphics.card_margin_y + graphics.card_spacing_y + 150)
-
-        love.graphics.setColor(1,1,1)
     end
 end
 
@@ -565,13 +721,16 @@ end
 
 function love.load()
     Game:load_images()
+    Game:load_fonts()
+
     Game:reset()
 
-    love.graphics.setBackgroundColor(1, 1, 1)
+    love.graphics.setBackgroundColor(1, 0.8, 0.6)
 end
 
 function love.draw()
     Game:print_overlay()
+    Game:print_dealer_character()
     Game:print_cards('player')
     Game:print_cards('dealer')
     Game:print_deck()
@@ -579,9 +738,9 @@ function love.draw()
     Game:print_winner()
 end
 
-function love.update()
+function love.update(dt)
 
-    Game:process()
+    Game:process(dt)
 
     -- no cards?
     if #Game.state.deck < 1 then
@@ -590,12 +749,18 @@ function love.update()
 end
 
 function love.keypressed(key)
-    if key == 'h' then
-        Game:request_player_hit()
-    elseif key == 's' then
+    if key == 's' then
         Game:request_round_end()
     elseif key == 'r' then
         Game:request_game_reset()
+    end
+end
+
+function love.mousepressed(mx, my, button)
+    if button == 1 then
+        if Game.state.view.deck.hover then
+            Game:request_player_hit()
+        end
     end
 end
 
