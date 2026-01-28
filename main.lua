@@ -1,6 +1,14 @@
 
+local AniQ = require('aniq')
 local Queue = require('queue')
 local Animation = require('animation')
+
+-- function that counts up every time its called
+local __c=0
+function iota()
+    __c = __c + 1
+    return __c
+end
 
 function build_deck()
     local deck = {}
@@ -110,13 +118,6 @@ function print_text_shadow(text, x, y)
     love.graphics.print(text, x, y)
 end
 
--- function that counts up every time its called
-local __c=0
-function iota()
-    __c = __c + 1
-    return __c
-end
-
 local Game = {
     -- Game loaded resources, textures, music, images...
     resources = {
@@ -200,7 +201,7 @@ local Game = {
                 dealer = {
                     focus_bar = {},
                     animation = {},
-                }
+                },
             },
         },
 
@@ -239,6 +240,60 @@ local Game = {
         },
     },
 }
+
+function enqueue_card_hover_animation(animations)
+    animations.enqueue(Animation.new({
+        TYPE = Animations.const.types.TRANSFORM,
+
+        -- Metadata
+        target_lift = -12,
+        hover = false,
+        lift = 0,
+
+        CHECK = function(self, state)
+            local hover = in_rect(
+                state.mouse_x,
+                state.mouse_y,
+                view.x,
+                view.y,
+                Game.const.CARD_W,
+                Game.const.CARD_H)
+
+            self.hover = true
+
+            -- This animation does not really stop
+        end
+
+        -- Update function
+        STEP = function(self, dt)
+            local target_lift = self.hover and -12 or 0
+            self.lift = self.lift + (target_lift - self.lift) * 12 * dt
+        end
+    }))
+end
+
+function enqueue_card_draw_animation(animations)
+    animations.enqueue(Animation.new({
+        TYPE = Animation.const.types.TRANSFORM,
+
+        -- Metadata
+        alpha = 0.
+        target_alpha = 1,
+
+        CHECK = function(self)
+            if self.alpha >= self.target_alpha then
+                self.playing = false
+            end
+        end
+
+        STEP = function(self, dt)
+            self.alpha = self.alpha +
+                (self.target_alpha - self.alpha) * 8 * dt
+        end
+    }))
+end
+
+
 
 function Game:load_images()
     local images = self.resources.images
@@ -323,18 +378,16 @@ function Game:hand_update_view(player)
         y = y + (graphics.card_spacing_y + graphics.card_margin_players_y)
     end
 
+    local animations = AniQ.new()
+
+    enqueue_card_draw_animation(animations)
+    enqueue_card_hover_animation(animations)
+
     self.state.view.hands[player][index] = {
         x = x,
         y = y,
-        target_x = x,
-        target_y = y,
 
-        lift = 0,
-        scale = 1,
-        hover = false,
-
-        alpha = 0,
-        target_alpha = 1,
+        animations = animations,
     }
 end
 
@@ -361,9 +414,7 @@ function Game:deck_update_view()
         x_div = 5,
         y_div = 10,
 
-        lift  = lift,
-        hover = hover,
-        scale = scale,
+        animations = AniQ.new(),
     }
 end
 
@@ -412,24 +463,16 @@ function Game:reset()
     -- Define opponent here
     self.state.round.dealer = {
         name = "Opponent",
-        
-        focus     = 0,
-        focus_max = 8,
     }
 
     self.state.view.ui.dealer = {
-        focus_bar = {
-            x = 150,
-            y = 10,
-        },
-
-        animation = Animation.new(
-                self.resources.images.characters[
-                    love.math.random(#self.resources.images.characters)],
-               480, 480, 14)
+        --animation = Animation.new(
+        --        self.resources.images.characters[
+        --            love.math.random(#self.resources.images.characters)],
+        --       480, 480, 14)
     }
 
-    self.state.view.ui.dealer.animation.playing = true
+    --self.state.view.ui.dealer.animation.playing = true
 
     self.state.view.hands = {
         player = {},
@@ -437,9 +480,7 @@ function Game:reset()
     }
 
     self.state.view.deck = {
-        lift = 0,
-        hover = 0,
-        scale = 1,
+        animations = AniQ.new(),
     }
 
     self.state.round.flags.player_can_hit = true
@@ -459,20 +500,16 @@ function Game:print_overlay()
     local graphics = self.settings.graphical
 
     love.graphics.setColor(0.2,0.2,0.2)
-
     love.graphics.rectangle("fill", 15, 30, 110, 200)
-
     love.graphics.setColor(0.4,0.4,0.4)
-
     love.graphics.rectangle("fill", 5, 15, 110, 200)
-
     love.graphics.setColor(1,1,1)
 end
 
 function Game:print_dealer_character()
-    Animation.draw(
-        self.state.view.ui.dealer.animation,
-        300, 10)
+    --Animation.draw(
+        --self.state.view.ui.dealer.animation,
+        --300, 10)
 end
 
 function Game:print_cards(player)
@@ -597,21 +634,6 @@ function Game:round_end()
     self:request_check_win()
 end
 
-function Game:cards_hover_check()
-    local mx, my = love.mouse.getPosition()
-
-    for player, cards in pairs(self.state.view.hands) do
-        for _, view in ipairs(cards) do
-            local hover = in_rect(
-                mx, my, view.x, view.y,
-                self.const.CARD_W,
-                self.const.CARD_H)
-
-            view.hover = hover
-        end
-    end
-end
-
 function Game:deck_hover_check()
     if #self.state.deck < 1 then
         self.state.view.deck.hover = false
@@ -628,17 +650,34 @@ function Game:deck_hover_check()
     deck.hover = hover
 end
 
+function Game:card_animation_check(view)
+    local animation = AniQ.peek(view.animations)
+
+    if not animation then return end
+
+    if animation.id == Game.const.animations.ANIMATION_HOVER then
+        local mx, my = love.mouse.getPosition()
+
+        AniQ.check(view.animations, {
+            mouse_x = mx,
+            mouse_y = my})
+    else
+        AniQ.check(view.animations)
+    end
+end
+
+function Game:cards_animation_check()
+    for player, cards in pairs(self.state.view.hands) do
+        for _, view in ipairs(cards) do
+            Game:card_animation_check(view)
+        end
+    end
+end
+
 function Game:cards_animation_process()
     for player, cards in pairs(self.state.view.hands) do
         for _, view in ipairs(cards) do
-            -- Lift
-            local target_lift = view.hover and -12 or 0
-            view.lift = view.lift +
-                (target_lift - view.lift) * 12 * self.deltatime
-
-            -- Fade
-            view.alpha = view.alpha +
-                (view.target_alpha - view.alpha) * 8 * self.deltatime
+            AniQ.update(view.animations)
         end
     end
 end
@@ -664,8 +703,8 @@ function Game:dealer_animation_process()
 end
 
 function Game:animations_process()
-    self:cards_hover_check()
-    self:cards_animation_process()
+    self:cards_animations_check()
+    self:cards_animations_process()
 
     self:deck_hover_check()
     self:deck_animation_process()

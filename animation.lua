@@ -1,36 +1,47 @@
-local Animation = {}
+local __c=0
+function iota()
+    __c = __c + 1
+    return __c
+end
+
+local Animation = {
+    const = {
+        TRANSFORM = iota(),
+        SHEET     = iota(),
+    },
+}
 
 Animation.fps = 24
 
-function Animation.new(image, w, h, frames, speed)
-    local animation = {}
+function Animation.new(animation_options)
+    local animation = animations_options 
 
-    animation.image = image
-    animation.quads = {}
+    animations.playing = false
 
-    animation.playing = false
+    if animation.TYPE == Animations.const.types.SHEET then
+        local image = animation.image
 
-    for y = 0, image:getHeight() - h, h do
-        for x = 0, image:getWidth() - w, w do
-            table.insert(animation.quads,
-                love.graphics.newQuad(x, y, w, h,
-                    image:getDimensions()))
+        animation.quads = {}
+
+        for y = 0, image:getHeight() - h, h do
+            for x = 0, image:getWidth() - w, w do
+                table.insert(animation.quads,
+                    love.graphics.newQuad(x, y, w, h,
+                        image:getDimensions()))
+            end
         end
+
+        animation.frames = animation.frames or #animation.quads
     end
 
     animation.timer = 0
-    animation.frame = 1
-
-    animation.frames = frames or #animation.quads
-    animation.speed = speed or 1
+    animation.speed = animation.speed or 1
+    animation.loop  = animation.loop or false
 
     return animation
 end
 
-function Animation.update(animation, dt)
-    if not animation.playing then return end
-
-    animation.timer = animation.timer + dt * animation.speed
+function Animation.update_sprite_sheet_anim()
     local frame_time = 1 / Animation.fps
 
     while animation.timer >= frame_time do
@@ -38,9 +49,32 @@ function Animation.update(animation, dt)
         animation.frame = animation.frame + 1
 
         if animation.frame > animation.frames then
-            animation.frame = 1
+            if animation.loop then
+                animation.frame = 1
+            else
+                animation.playing = false
+                animation.frame = 1
+            end
         end
     end
+end
+
+function Animation.update(animation, dt)
+    if not animation.playing then return end
+
+    animation.timer = animation.timer + dt * animation.speed
+
+    if animation.TYPE == Animations.const.types.SHEET then
+        Animation.update_sprite_sheet_anim(animation)
+    end
+
+    if animation.TYPE == Animations.const.types.TRANSFORM then
+        animation:STEP(dt)
+    end
+end
+
+function Animation.check(animation, data)
+    animation:check(data)
 end
 
 function Animation.draw(animation, x, y)

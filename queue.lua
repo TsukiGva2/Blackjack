@@ -17,6 +17,12 @@ function Queue.push(q, v)
     q[last] = v
 end
 
+function Queue.peek(q)
+    local first = q.first
+    if first > q.last then return nil end
+    return q[first]
+end
+
 function Queue.pop(q)
     local first = q.first
     if first > q.last then error('list is empty') end
